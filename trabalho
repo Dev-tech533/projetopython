@@ -1,0 +1,258 @@
+
+import tkinter as tk
+from tkinter import ttk, messagebox, simpledialog
+import sqlite3
+
+DB_NAME = "livros.db"
+
+def init_db():
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS livros (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            titulo TEXT NOT NULL,
+            autor TEXT NOT NULL,
+            review TEXT NOT NULL,
+            usuario TEXT NOT NULL,
+            favorito INTEGER DEFAULT 0,
+            ignorado INTEGER DEFAULT 0
+        );
+    """)
+    cursor.execute("CREATE TABLE IF NOT EXISTS usuarios (login TEXT PRIMARY KEY, senha TEXT NOT NULL);")
+    cursor.execute("INSERT OR IGNORE INTO usuarios (login, senha) VALUES ('admin', '1234')")
+    conn.commit()
+    conn.close()
+
+# --- Tela de Login com DOIS BOTÕES VISÍVEIS ---
+def login_window():
+    root = tk.Tk()
+    root.title("Login")
+    root.geometry("320x220")
+    root.resizable(False, False)
+
+    tk.Label(root, text="Usuário:", font=("Arial", 10)).pack(pady=(20, 0))
+    entry_user = tk.Entry(root, width=30)
+    entry_user.pack(pady=5)
+    entry_user.insert(0, "admin")
+
+    tk.Label(root, text="Senha:", font=("Arial", 10)).pack()
+    entry_pass = tk.Entry(root, show="*", width=30)
+    entry_pass.pack(pady=5)
+
+    # Mensagem de erro (opcional, mas útil)
+    msg_label = tk.Label(root, text="", fg="red")
+    msg_label.pack()
+
+    def entrar():
+        user, pwd = entry_user.get().strip(), entry_pass.get()
+        if not user or not pwd:
+            msg_label.config(text="Preencha todos os campos.")
+            return
+        conn = sqlite3.connect(DB_NAME)
+        c = conn.cursor()
+        c.execute("SELECT senha FROM usuarios WHERE login = ?", (user,))
+        res = c.fetchone()
+        conn.close()
+        if res and res[0] == pwd:
+            root.destroy()
+            app = tk.Tk()
+            App(app)
+            app.mainloop()
+        else:
+            msg_label.config(text="Usuário ou senha inválidos.")
+
+    def cadastrar():
+        user, pwd = entry_user.get().strip(), entry_pass.get()
+        if not user or not pwd:
+            msg_label.config(text="Preencha usuário e senha para cadastrar.")
+            return
+        if len(pwd) < 4:
+            msg_label.config(text="Senha deve ter pelo menos 4 caracteres.")
+            return
+        try:
+            conn = sqlite3.connect(DB_NAME)
+            conn.execute("INSERT INTO usuarios (login, senha) VALUES (?, ?)", (user, pwd))
+            conn.commit()
+            conn.close()
+            msg_label.config(text="Usuário cadastrado! Clique em 'Entrar'.", fg="green")
+        except sqlite3.IntegrityError:
+            msg_label.config(text="Usuário já existe.", fg="red")
+
+    # ✅ OS DOIS BOTÕES ESTÃO AQUI, VISÍVEIS NA MESMA TELA ✅
+    btn_frame = tk.Frame(root)
+    btn_frame.pack(pady=15)
+    tk.Button(btn_frame, text="Entrar", command=entrar, width=12, bg="#4CAF50", fg="white").pack(side="left", padx=5)
+    tk.Button(btn_frame, text="Cadastrar", command=cadastrar, width=12, bg="#2196F3", fg="white").pack(side="left", padx=5)
+
+    root.bind('<Return>', lambda e: entrar())
+    root.mainloop()
+
+# --- SEU CÓDIGO EXISTENTE (SEM ALTERAÇÕES) ---
+def listar_livros():
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, titulo, usuario, favorito FROM livros WHERE ignorado = 0")
+    rows = cursor.fetchall()
+    conn.close()
+    return rows
+
+def toggle_favorito(id_livro, estado_atual):
+    novo_estado = 0 if estado_atual == 1 else 1
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("UPDATE livros SET favorito = ? WHERE id = ?", (novo_estado, id_livro))
+    conn.commit()
+    conn.close()
+    return novo_estado
+
+class App:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Sistema de Reviews de Livros")
+        self.root.geometry("800x600")
+
+        frame_botoes = tk.Frame(root)
+        frame_botoes.pack(pady=10)
+
+        tk.Button(frame_botoes, text="Adicionar Livro", command=self.adicionar_livro_ui).pack(side="left", padx=5)
+        tk.Button(frame_botoes, text="Editar Livro", command=self.editar_livro_ui).pack(side="left", padx=5)
+        tk.Button(frame_botoes, text="Deletar Livro", command=self.deletar_livro_ui).pack(side="left", padx=5)
+        tk.Button(frame_botoes, text="Favoritar/Desfavoritar", command=self.favoritar_livro).pack(side="left", padx=5)
+        tk.Button(frame_botoes, text="Informações", command=self.mostrar_informacoes).pack(side="left", padx=5)
+
+        self.tree = ttk.Treeview(root, columns=("ID", "Título", "Usuário", "Favorito"), show="headings")
+        self.tree.heading("ID", text="ID")
+        self.tree.heading("Título", text="Título")
+        self.tree.heading("Usuário", text="Usuário")
+        self.tree.heading("Favorito", text="Favorito")
+        self.tree.column("ID", width=50)
+        self.tree.column("Título", width=250)
+        self.tree.column("Usuário", width=150)
+        self.tree.column("Favorito", width=100)
+        self.tree.pack(fill="both", expand=True, padx=10, pady=10)
+
+        self.atualizar_tabela()
+
+    def atualizar_tabela(self):
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+        for livro in listar_livros():
+            favorito_text = "Sim" if livro[3] == 1 else "Não"
+            self.tree.insert("", "end", values=(livro[0], livro[1], livro[2], favorito_text))
+
+    def mostrar_informacoes(self):
+        selected = self.tree.selection()
+        if not selected:
+            messagebox.showwarning("Aviso", "Selecione um livro.")
+            return
+        item_id = self.tree.item(selected[0])["values"][0]
+        self._abrir_janela_info(item_id)
+
+    def _abrir_janela_info(self, item_id):
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+        cursor.execute("SELECT titulo, autor, review, usuario FROM livros WHERE id = ?", (item_id,))
+        row = cursor.fetchone()
+        conn.close()
+        if not row:
+            return
+        titulo, autor, review, usuario = row
+
+        janela = tk.Toplevel(self.root)
+        janela.title(f"Informações: {titulo}")
+        janela.geometry("600x400")
+
+        canvas = tk.Canvas(janela, width=100, height=150, bg="lightgray")
+        canvas.pack(side="left", padx=10, pady=10)
+        canvas.create_rectangle(10, 10, 90, 140, fill="brown")
+        canvas.create_text(50, 75, text="📚", font=("Arial", 30), fill="white")
+
+        frame = tk.Frame(janela)
+        frame.pack(side="right", fill="both", expand=True, padx=10, pady=10)
+        tk.Label(frame, text=f"Título: {titulo}", font=("Arial", 14, "bold")).pack(anchor="w")
+        tk.Label(frame, text=f"Autor: {autor}", font=("Arial", 12)).pack(anchor="w")
+        tk.Label(frame, text=f"Usuário: {usuario}", font=("Arial", 12)).pack(anchor="w")
+        tk.Label(frame, text="Review:", font=("Arial", 12, "bold")).pack(anchor="w", pady=(10, 0))
+        txt = tk.Text(frame, wrap="word", height=8)
+        txt.insert("1.0", review)
+        txt.config(state="disabled")
+        txt.pack(fill="both", expand=True, pady=5)
+
+    def adicionar_livro_ui(self):
+        titulo = simpledialog.askstring("Adicionar Livro", "Título:")
+        if not titulo: return
+        autor = simpledialog.askstring("Adicionar Livro", "Autor:")
+        if not autor: return
+        review = simpledialog.askstring("Adicionar Livro", "Review:")
+        if not review: return
+        usuario = simpledialog.askstring("Adicionar Livro", "Seu nome:")
+        if not usuario: return
+        conn = sqlite3.connect(DB_NAME)
+        conn.execute("INSERT INTO livros (titulo, autor, review, usuario) VALUES (?, ?, ?, ?)",
+                     (titulo.strip(), autor.strip(), review.strip(), usuario.strip()))
+        conn.commit()
+        conn.close()
+        self.atualizar_tabela()
+
+    def editar_livro_ui(self):
+        selected = self.tree.selection()
+        if not selected:
+            messagebox.showwarning("Aviso", "Selecione um livro.")
+            return
+        item_id = self.tree.item(selected[0])["values"][0]
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+        cursor.execute("SELECT titulo, autor, review, usuario FROM livros WHERE id = ?", (item_id,))
+        row = cursor.fetchone()
+        conn.close()
+        if not row: return
+        titulo, autor, review, usuario = row
+
+        novo_titulo = simpledialog.askstring("Editar", "Título:", initialvalue=titulo)
+        if novo_titulo is None: return
+        novo_autor = simpledialog.askstring("Editar", "Autor:", initialvalue=autor)
+        if novo_autor is None: return
+        nova_review = simpledialog.askstring("Editar", "Review:", initialvalue=review)
+        if nova_review is None: return
+        novo_usuario = simpledialog.askstring("Editar", "Usuário:", initialvalue=usuario)
+        if novo_usuario is None: return
+
+        conn = sqlite3.connect(DB_NAME)
+        conn.execute("""
+            UPDATE livros 
+            SET titulo = ?, autor = ?, review = ?, usuario = ? 
+            WHERE id = ?
+        """, (novo_titulo.strip(), novo_autor.strip(), nova_review.strip(), novo_usuario.strip(), item_id))
+        conn.commit()
+        conn.close()
+        self.atualizar_tabela()
+
+    def deletar_livro_ui(self):
+        selected = self.tree.selection()
+        if not selected:
+            messagebox.showwarning("Aviso", "Selecione um livro.")
+            return
+        item_id = self.tree.item(selected[0])["values"][0]
+        if messagebox.askyesno("Confirmação", "Deletar este livro permanentemente?"):
+            conn = sqlite3.connect(DB_NAME)
+            conn.execute("DELETE FROM livros WHERE id = ?", (item_id,))
+            conn.commit()
+            conn.close()
+            self.atualizar_tabela()
+
+    def favoritar_livro(self):
+        selected = self.tree.selection()
+        if not selected:
+            messagebox.showwarning("Aviso", "Selecione um livro para favoritar/desfavoritar.")
+            return
+        item = self.tree.item(selected[0])
+        item_id = item["values"][0]
+        estado_atual = 1 if item["values"][3] == "Sim" else 0
+        toggle_favorito(item_id, estado_atual)
+        self.atualizar_tabela()
+
+# --- Execução ---
+if __name__ == "__main__":
+    init_db()
+    login_window()  # ← começa pela tela de login com os dois botões
